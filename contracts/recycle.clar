@@ -12,7 +12,7 @@
 (define-constant MAX_ARTISAN_POINTS u1000000)
 (define-constant CRAFTING_THRESHOLD u100)
 (define-constant MAX_CRAFTS_PER_ARTISAN u1000)
-(define-constant MIN_POINTS (- 0 MAX_ARTISAN_POINTS))  ;; New constant for minimum points
+(define-constant MIN_POINTS (to-int (- 0 (to-int MAX_ARTISAN_POINTS))))  ;; Fixed type conversion
 
 ;; Valid craft conditions
 (define-data-var valid-conditions (list 5 (string-ascii 20)) (list "listed" "commissioned" "completed" "restoring" "archived"))
