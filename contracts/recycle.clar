@@ -79,7 +79,9 @@
   (let ((caller tx-sender)
         (artisan-info (default-to { mastery: u0, crafts-count: u0 } (map-get? artisan-data caller))))
     (if (and (> craft-id u0) (<= craft-id (get crafts-count artisan-info)))
-      (if (is-valid-condition new-condition)
+      (if (and 
+            (<= (len new-condition) u20)
+            (is-valid-condition new-condition))
         (match (map-get? crafts {artisan: caller, id: craft-id})
           craft (begin
             (map-set crafts 
@@ -89,7 +91,7 @@
           ERR_CRAFT_NOT_FOUND)
         ERR_INVALID_CONDITION)
       ERR_INVALID_INPUT)))
-
+      
 (define-public (remove-craft (craft-id uint))
   (let ((caller tx-sender)
         (artisan-info (default-to { mastery: u0, crafts-count: u0 } (map-get? artisan-data caller))))
@@ -107,10 +109,9 @@
 
 (define-public (update-mastery (artisan principal) (points int))
   (if (is-contract-owner)
-    (let ((current-data (default-to { mastery: u0, crafts-count: u0 } (map-get? artisan-data artisan)))
-          (new-mastery (+ (get mastery current-data) (to-uint points))))
-      (if (<= new-mastery MAX_ARTISAN_POINTS)
-        (begin
+    (let ((current-data (default-to { mastery: u0, crafts-count: u0 } (map-get? artisan-data artisan))))
+      (if (and (>= points (to-int u0)) (<= (+ (get mastery current-data) (to-uint points)) MAX_ARTISAN_POINTS))
+        (let ((new-mastery (+ (get mastery current-data) (to-uint points))))
           (map-set artisan-data 
             artisan 
             (merge current-data { mastery: new-mastery }))
