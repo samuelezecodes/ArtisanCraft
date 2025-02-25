@@ -1,4 +1,4 @@
-;; ArtisanCraft Smart Contract - with Enhanced Security and Input Validation
+;; ArtisanCraft Smart Contract - with Enhanced Input Validation and Additional Functionality
 
 ;; Constants
 (define-constant CONTRACT_OWNER tx-sender)
@@ -7,12 +7,13 @@
 (define-constant ERR_INVALID_INPUT (err u3))
 (define-constant ERR_CRAFT_ALREADY_EXISTS (err u4))
 (define-constant ERR_INVALID_CONDITION (err u5))
-(define-constant ERR_INVALID_POINTS (err u6))
+(define-constant ERR_CRAFT_LIMIT_REACHED (err u6))
+(define-constant ERR_NOT_ENOUGH_MASTERY (err u7))
 (define-constant MAX_DESCRIPTION_LENGTH u128)
 (define-constant MAX_ARTISAN_POINTS u1000000)
 (define-constant CRAFTING_THRESHOLD u100)
 (define-constant MAX_CRAFTS_PER_ARTISAN u1000)
-(define-constant MIN_POINTS (to-int (- 0 (to-int MAX_ARTISAN_POINTS))))  ;; Fixed type conversion
+(define-constant MASTERY_REWARD u10)
 
 ;; Valid craft conditions
 (define-data-var valid-conditions (list 5 (string-ascii 20)) (list "listed" "commissioned" "completed" "restoring" "archived"))
@@ -39,63 +40,55 @@
         (map-set artisan-data 
           artisan 
           (merge artisan-info { crafts-count: new-count }))
-        new-count)
-      u0)))
+        (ok new-count))
+      ERR_CRAFT_LIMIT_REACHED)))
 
 (define-private (is-valid-condition (condition (string-ascii 20)))
   (is-some (index-of (var-get valid-conditions) condition)))
 
-(define-private (validate-condition (condition (string-ascii 20)))
-  (if (is-valid-condition condition)
-    (ok condition)
-    ERR_INVALID_CONDITION))
-
-(define-private (validate-points (points int))
-  (if (and 
-       (>= points MIN_POINTS)
-       (<= points (to-int MAX_ARTISAN_POINTS)))
-    (ok points)
-    ERR_INVALID_POINTS))
-
-(define-private (validate-artisan (artisan principal))
-  (if (and 
-       (is-some (map-get? artisan-data artisan))
-       (not (is-eq artisan CONTRACT_OWNER)))
-    (ok artisan)
-    ERR_UNAUTHORIZED))
-
 ;; Public functions
 (define-public (add-craft (description (string-ascii 128)))
   (let ((caller tx-sender)
-        (craft-id (get-and-increment-artisan-crafts caller)))
-    (if (is-eq craft-id u0)
+        (craft-id (unwrap! (get-and-increment-artisan-crafts caller) ERR_INVALID_INPUT)))
+    (if (> (len description) MAX_DESCRIPTION_LENGTH)
       ERR_INVALID_INPUT
-      (if (> (len description) MAX_DESCRIPTION_LENGTH)
-        ERR_INVALID_INPUT
-        (if (is-some (map-get? crafts {artisan: caller, id: craft-id}))
-          ERR_CRAFT_ALREADY_EXISTS
-          (begin
-            (map-set crafts 
-              {artisan: caller, id: craft-id}
-              {description: description, condition: "listed"})
-            (var-set total-crafts (+ (var-get total-crafts) u1))
-            (ok craft-id)))))))
+      (if (is-some (map-get? crafts {artisan: caller, id: craft-id}))
+        ERR_CRAFT_ALREADY_EXISTS
+        (begin
+          (map-set crafts 
+            {artisan: caller, id: craft-id}
+            {description: description, condition: "listed"})
+          (var-set total-crafts (+ (var-get total-crafts) u1))
+          (ok craft-id))))))
+
+(define-public (complete-craft (craft-id uint))
+  (let ((caller tx-sender)
+        (artisan-info (default-to { mastery: u0, crafts-count: u0 } (map-get? artisan-data caller))))
+    (if (and (> craft-id u0) (<= craft-id (get crafts-count artisan-info)))
+      (match (map-get? crafts {artisan: caller, id: craft-id})
+        craft (begin
+          (map-set crafts 
+            {artisan: caller, id: craft-id}
+            (merge craft {condition: "completed"}))
+          (unwrap! (update-mastery caller (to-int MASTERY_REWARD)) ERR_INVALID_INPUT)
+          (ok true))
+        ERR_CRAFT_NOT_FOUND)
+      ERR_INVALID_INPUT)))
 
 (define-public (update-craft-condition (craft-id uint) (new-condition (string-ascii 20)))
   (let ((caller tx-sender)
         (artisan-info (default-to { mastery: u0, crafts-count: u0 } (map-get? artisan-data caller))))
-    (match (validate-condition new-condition)
-      validated-condition
-        (if (and (> craft-id u0) (<= craft-id (get crafts-count artisan-info)))
-          (match (map-get? crafts {artisan: caller, id: craft-id})
-            craft (begin
-              (map-set crafts 
-                {artisan: caller, id: craft-id}
-                (merge craft {condition: validated-condition}))
-              (ok true))
-            ERR_CRAFT_NOT_FOUND)
-          ERR_INVALID_INPUT)
-      error error)))
+    (if (and (> craft-id u0) (<= craft-id (get crafts-count artisan-info)))
+      (if (is-valid-condition new-condition)
+        (match (map-get? crafts {artisan: caller, id: craft-id})
+          craft (begin
+            (map-set crafts 
+              {artisan: caller, id: craft-id}
+              (merge craft {condition: new-condition}))
+            (ok true))
+          ERR_CRAFT_NOT_FOUND)
+        ERR_INVALID_CONDITION)
+      ERR_INVALID_INPUT)))
 
 (define-public (remove-craft (craft-id uint))
   (let ((caller tx-sender)
@@ -114,21 +107,15 @@
 
 (define-public (update-mastery (artisan principal) (points int))
   (if (is-contract-owner)
-    (match (validate-artisan artisan)
-      validated-artisan
-        (match (validate-points points)
-          validated-points
-            (let ((current-data (unwrap! (map-get? artisan-data validated-artisan) ERR_UNAUTHORIZED))
-                  (new-mastery (+ (get mastery current-data) (to-uint validated-points))))
-              (if (<= new-mastery MAX_ARTISAN_POINTS)
-                (begin
-                  (map-set artisan-data 
-                    validated-artisan 
-                    (merge current-data { mastery: new-mastery }))
-                  (ok new-mastery))
-                ERR_INVALID_INPUT))
-          error error)
-      error error)
+    (let ((current-data (default-to { mastery: u0, crafts-count: u0 } (map-get? artisan-data artisan)))
+          (new-mastery (+ (get mastery current-data) (to-uint points))))
+      (if (<= new-mastery MAX_ARTISAN_POINTS)
+        (begin
+          (map-set artisan-data 
+            artisan 
+            (merge current-data { mastery: new-mastery }))
+          (ok new-mastery))
+        ERR_INVALID_INPUT))
     ERR_UNAUTHORIZED))
 
 ;; Read-only functions
